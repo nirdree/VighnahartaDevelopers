@@ -15,6 +15,7 @@ import GridOnIcon from '@mui/icons-material/GridOn';
 import { PLOT_STATUS_COLORS, PLOT_STATUS_LABELS } from '@/lib/constants';
 import { useAuth } from '@/hooks/useAuth';
 import PaymentDialog from './PaymentDialog';
+import BookingDialog from './BookingDialog';
 
 function InfoRow({ label, value }) {
   if (!value) return null;
@@ -31,6 +32,7 @@ function InfoRow({ label, value }) {
 export default function PlotDetailDrawer({ plot, open, onClose, onEdit, onDelete, onCopy, onPlotUpdated }) {
   const { user } = useAuth();
   const [paymentOpen, setPaymentOpen] = useState(false);
+  const [bookingOpen, setBookingOpen] = useState(false);
   if (!plot) return null;
 
   const statusColor = PLOT_STATUS_COLORS[plot.status] || '#999';
@@ -79,7 +81,7 @@ export default function PlotDetailDrawer({ plot, open, onClose, onEdit, onDelete
               <InfoRow label="Area" value={plot.area} />
               <InfoRow label="Length" value={plot.length} />
               <InfoRow label="Width" value={plot.width} />
-              <InfoRow label="Price" value={plot.price ? `₹${Number(plot.price).toLocaleString('en-IN')}` : null} />
+              <InfoRow label="Price" value={plot.finalPlotPrice ? `₹${Number(plot.finalPlotPrice).toLocaleString('en-IN')} (Final)` : plot.price ? `₹${Number(plot.price).toLocaleString('en-IN')}` : null} />
               <InfoRow label="Shape" value={plot.shapeType} />
               <InfoRow label="Notes" value={plot.notes} />
             </Stack>
@@ -147,10 +149,10 @@ export default function PlotDetailDrawer({ plot, open, onClose, onEdit, onDelete
                 variant="contained"
                 fullWidth
                 startIcon={<PaymentsIcon />}
-                onClick={() => setPaymentOpen(true)}
+                onClick={() => plot.status === 'available' ? setBookingOpen(true) : setPaymentOpen(true)}
                 sx={{ bgcolor: '#c8922a', '&:hover': { bgcolor: '#a57420' } }}
               >
-                Manage Payments
+                {plot.status === 'available' ? 'Book Plot' : 'Manage Payments'}
               </Button>
               <Button
                 variant="contained"
@@ -180,6 +182,12 @@ export default function PlotDetailDrawer({ plot, open, onClose, onEdit, onDelete
         onClose={() => setPaymentOpen(false)}
         plot={plot}
         onPaymentAdded={(updatedPlot) => { onPlotUpdated?.(updatedPlot); setPaymentOpen(false); }}
+      />
+      <BookingDialog
+        open={bookingOpen}
+        onClose={() => setBookingOpen(false)}
+        plot={plot}
+        onBooked={(updatedPlot) => { onPlotUpdated?.(updatedPlot); setBookingOpen(false); }}
       />
     </Drawer>
   );

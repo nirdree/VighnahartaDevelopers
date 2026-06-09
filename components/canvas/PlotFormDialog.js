@@ -29,7 +29,7 @@ const EMPTY_FORM = {
   notes: '',
 };
 
-export default function PlotFormDialog({ open, onClose, onSave, projectId, initialData, editMode }) {
+export default function PlotFormDialog({ open, onClose, onSave, projectId, initialData, editMode, plots = [] }) {
   const { enqueueSnackbar } = useSnackbar();
   const [form, setForm] = useState(EMPTY_FORM);
   const [errors, setErrors] = useState({});
@@ -39,8 +39,10 @@ export default function PlotFormDialog({ open, onClose, onSave, projectId, initi
 
   useEffect(() => {
     if (open) {
-      fetchCustomers();
-      fetchAgents();
+      if (editMode) {
+        fetchCustomers();
+        fetchAgents();
+      }
       if (initialData) {
         setForm({
           plotNumber: initialData.plotNumber || '',
@@ -54,7 +56,7 @@ export default function PlotFormDialog({ open, onClose, onSave, projectId, initi
           notes: initialData.notes || '',
         });
       } else {
-        setForm(EMPTY_FORM);
+        setForm({ ...EMPTY_FORM, plotNumber: `Plot-${plots.length + 1}` });
       }
       setErrors({});
     }
@@ -107,7 +109,7 @@ export default function PlotFormDialog({ open, onClose, onSave, projectId, initi
       </DialogTitle>
       <DialogContent>
         <Stack spacing={2.5} pt={1}>
-          <TextField label="Plot Number *" fullWidth {...f('plotNumber')} placeholder="e.g. A-101" />
+          <TextField label="Plot Number *" fullWidth {...f('plotNumber')} placeholder={`e.g. Plot-${plots.length + 1}`} />
           <Stack direction="row" spacing={2}>
             <TextField label="Area" fullWidth {...f('area')} placeholder="e.g. 1200 sq.ft" />
             <TextField label="Length" fullWidth {...f('length')} placeholder="e.g. 40 ft" />
@@ -121,25 +123,31 @@ export default function PlotFormDialog({ open, onClose, onSave, projectId, initi
             onChange={(e) => setForm({ ...form, price: e.target.value })}
             InputProps={{ startAdornment: <InputAdornment position="start">₹</InputAdornment> }}
           />
-          <TextField label="Status" select fullWidth value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value })}>
-            {STATUS_OPTIONS.map(s => <MenuItem key={s.value} value={s.value}>{s.label}</MenuItem>)}
-          </TextField>
+          {editMode && (
+            <TextField label="Status" select fullWidth value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value })}>
+              {STATUS_OPTIONS.map(s => <MenuItem key={s.value} value={s.value}>{s.label}</MenuItem>)}
+            </TextField>
+          )}
 
-          <Autocomplete
-            options={customers}
-            getOptionLabel={(o) => typeof o === 'object' ? `${o.name} — ${o.mobile}` : o}
-            value={customers.find(c => c._id === form.customerId) || null}
-            onChange={(_, v) => setForm({ ...form, customerId: v?._id || null })}
-            renderInput={(params) => <TextField {...params} label="Assign Customer (optional)" />}
-          />
+          {editMode && (
+            <Autocomplete
+              options={customers}
+              getOptionLabel={(o) => typeof o === 'object' ? `${o.name} — ${o.mobile}` : o}
+              value={customers.find(c => c._id === form.customerId) || null}
+              onChange={(_, v) => setForm({ ...form, customerId: v?._id || null })}
+              renderInput={(params) => <TextField {...params} label="Assign Customer (optional)" />}
+            />
+          )}
 
-          <Autocomplete
-            options={agents}
-            getOptionLabel={(o) => typeof o === 'object' ? o.name : o}
-            value={agents.find(a => a._id === form.assignedAgent) || null}
-            onChange={(_, v) => setForm({ ...form, assignedAgent: v?._id || null })}
-            renderInput={(params) => <TextField {...params} label="Assign Agent (optional)" />}
-          />
+          {editMode && (
+            <Autocomplete
+              options={agents}
+              getOptionLabel={(o) => typeof o === 'object' ? o.name : o}
+              value={agents.find(a => a._id === form.assignedAgent) || null}
+              onChange={(_, v) => setForm({ ...form, assignedAgent: v?._id || null })}
+              renderInput={(params) => <TextField {...params} label="Assign Agent (optional)" />}
+            />
+          )}
 
           <TextField label="Notes" fullWidth multiline rows={2} value={form.notes} onChange={e => setForm({...form, notes: e.target.value})} />
         </Stack>

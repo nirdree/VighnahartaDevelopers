@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import dbConnect from '@/lib/db';
 import Plot from '@/models/Plot';
 import Payment from '@/models/Payment';
+import Customer from '@/models/Customer';
 import { getUserFromRequest } from '@/lib/auth';
 
 function deriveStatus(totalPaid, plotPrice, payments) {
@@ -40,7 +41,7 @@ export async function GET(request, { params }) {
   }
 }
 
-// PATCH — add a payment record and auto-update plot status
+// PATCH — book plot: create customers, record payment, update plot status
 export async function PATCH(request, { params }) {
   try {
     const user = getUserFromRequest(request);
@@ -48,27 +49,55 @@ export async function PATCH(request, { params }) {
     if (user.role !== 'admin') return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 });
 
     await dbConnect();
-    const { customerId, amount, paymentType, paymentDate, note } = await request.json();
+    const body = await request.json();
+    const { customers, email, address, notes, amount, paymentType, paymentDate, note, paymentMode, finalPlotPrice, nextInstalmentDate, agentId, agentCommission } = body;
 
-    if (!customerId || !amount || !paymentType) {
-      return NextResponse.json({ success: false, error: 'customerId, amount and paymentType are required' }, { status: 400 });
+    if (!amount || Number(amount) <= 0 || !paymentType) {
+      return NextResponse.json({ success: false, error: 'Amount and payment type are required' }, { status: 400 });
     }
 
-    await Payment.create({ plotId: params.id, customerId, amount, paymentType, paymentDate, note, recordedBy: user.id });
+    // Upsert primary customer (first in list)
+    let primaryCustomerId = null;
+    if (customers && customers.length > 0) {
+      const primary = customers[0];
+      if (primary.name && primary.mobile) {
+        let cust = await Customer.findOne({ mobile: primary.mobile.trim() });
+        if (!cust) cust = await Customer.create({ name: primary.name, mobile: primary.mobile, email: email || '', address: address || '', notes: notes || '' });
+        primaryCustomerId = cust._id;
+      }
+    }
+
+    await Payment.create({
+      plotId: params.id,
+      customerId: primaryCustomerId,
+      amount: Number(amount),
+      paymentType,
+      paymentDate: paymentDate || new Date(),
+      note,
+      paymentMode: paymentMode || 'cash',
+      finalPlotPrice: finalPlotPrice ? Number(finalPlotPrice) : undefined,
+      nextInstalmentDate: nextInstalmentDate || undefined,
+      agentCommission: agentCommission ? Number(agentCommission) : undefined,
+      recordedBy: user.id,
+    });
 
     const allPayments = await Payment.find({ plotId: params.id });
     const totalPaid = allPayments.reduce((sum, p) => sum + p.amount, 0);
     const plot = await Plot.findById(params.id);
-    const newStatus = deriveStatus(totalPaid, plot.price, allPayments);
+    const effectivePrice = finalPlotPrice ? Number(finalPlotPrice) : (plot.price || 0);
+    const newStatus = deriveStatus(totalPaid, effectivePrice, allPayments);
 
-    const updated = await Plot.findByIdAndUpdate(
-      params.id,
-      { status: newStatus, customerId },
-      { new: true }
-    ).populate('customerId', 'name mobile email address notes').populate('assignedAgent', 'name email');
+    const updateData = { status: newStatus };
+    if (primaryCustomerId) updateData.customerId = primaryCustomerId;
+    if (agentId) updateData.assignedAgent = agentId;
+
+    const updated = await Plot.findByIdAndUpdate(params.id, updateData, { new: true })
+      .populate('customerId', 'name mobile email address notes')
+      .populate('assignedAgent', 'name email');
 
     return NextResponse.json({ success: true, data: updated, totalPaid });
   } catch (error) {
+    console.error('PATCH error:', error);
     return NextResponse.json({ success: false, error: 'Internal server error' }, { status: 500 });
   }
 }

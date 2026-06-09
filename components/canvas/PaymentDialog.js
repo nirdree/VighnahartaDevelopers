@@ -18,7 +18,23 @@ const PAYMENT_TYPES = [
   { value: 'full', label: 'Full Payment' },
 ];
 
-const EMPTY = { amount: '', paymentType: 'token', paymentDate: new Date().toISOString().split('T')[0], note: '' };
+const PAYMENT_MODES = [
+  { value: 'cash', label: 'Cash' },
+  { value: 'cheque', label: 'Cheque' },
+  { value: 'upi', label: 'UPI' },
+  { value: 'bank_transfer', label: 'Bank Transfer' },
+  { value: 'other', label: 'Other' },
+];
+
+const EMPTY = { 
+  amount: '', 
+  paymentType: 'token', 
+  paymentDate: new Date().toISOString().split('T')[0], 
+  paymentMode: 'cash',
+  finalPlotPrice: '',
+  nextInstalmentDate: '',
+  note: '' 
+};
 
 export default function PaymentDialog({ open, onClose, plot, onPaymentAdded }) {
   const { enqueueSnackbar } = useSnackbar();
@@ -46,9 +62,6 @@ export default function PaymentDialog({ open, onClose, plot, onPaymentAdded }) {
     if (!form.amount || Number(form.amount) <= 0) {
       enqueueSnackbar('Enter a valid amount', { variant: 'warning' }); return;
     }
-    if (!plot.customerId) {
-      enqueueSnackbar('Assign a customer to the plot before adding payments', { variant: 'warning' }); return;
-    }
     setLoading(true);
     try {
       const customerId = typeof plot.customerId === 'object' ? plot.customerId._id : plot.customerId;
@@ -65,7 +78,13 @@ export default function PaymentDialog({ open, onClose, plot, onPaymentAdded }) {
     setLoading(false);
   };
 
-  const remaining = plot ? Math.max(0, (plot.price || 0) - totalPaid) : 0;
+  const remaining = (() => {
+    // Use final plot price if available, otherwise use original plot price
+    const effectivePrice = payments.length > 0 && payments[0].finalPlotPrice 
+      ? payments[0].finalPlotPrice 
+      : (plot?.price || 0);
+    return Math.max(0, effectivePrice - totalPaid);
+  })();
 
   return (
     <Dialog open={open} onClose={onClose} maxWidth="sm" fullWidth>
@@ -79,18 +98,34 @@ export default function PaymentDialog({ open, onClose, plot, onPaymentAdded }) {
           {/* Summary */}
           <Stack direction="row" spacing={2}>
             <Box flex={1} sx={{ bgcolor: '#e8f5e9', p: 1.5, borderRadius: 2, textAlign: 'center' }}>
-              <Typography variant="caption" color="#555">Total Price</Typography>
-              <Typography fontWeight={700} color="#1a3c5e">₹{Number(plot?.price || 0).toLocaleString('en-IN')}</Typography>
+              <Typography variant="caption" color="#555">
+                {payments.length > 0 && payments[0].finalPlotPrice ? 'Final Price' : 'Plot Price'}
+              </Typography>
+              <Typography fontWeight={700} color="#1a3c5e">
+                ₹{Number(payments.length > 0 && payments[0].finalPlotPrice ? payments[0].finalPlotPrice : (plot?.price || 0)).toLocaleString('en-IN')}
+              </Typography>
             </Box>
             <Box flex={1} sx={{ bgcolor: '#e3f2fd', p: 1.5, borderRadius: 2, textAlign: 'center' }}>
               <Typography variant="caption" color="#555">Total Paid</Typography>
               <Typography fontWeight={700} color="#2e7d32">₹{totalPaid.toLocaleString('en-IN')}</Typography>
             </Box>
             <Box flex={1} sx={{ bgcolor: '#fff3e0', p: 1.5, borderRadius: 2, textAlign: 'center' }}>
-              <Typography variant="caption" color="#555">Remaining</Typography>
+              <Typography variant="caption" color="#555">Pending</Typography>
               <Typography fontWeight={700} color="#e65100">₹{remaining.toLocaleString('en-IN')}</Typography>
             </Box>
           </Stack>
+
+          {/* Show latest final price if recorded */}
+          {payments.length > 0 && payments[0].finalPlotPrice && (
+            <Box sx={{ bgcolor: '#f3e5f5', p: 2, borderRadius: 2, border: '2px solid #9c27b0' }}>
+              <Typography variant="subtitle2" fontWeight={700} color="#6a1b9a">
+                💰 Final Price (Customer Will Pay)
+              </Typography>
+              <Typography variant="h5" fontWeight={700} color="#1a3c5e" mt={0.5}>
+                ₹{Number(payments[0].finalPlotPrice).toLocaleString('en-IN')}
+              </Typography>
+            </Box>
+          )}
 
           <Divider />
 
@@ -125,12 +160,44 @@ export default function PaymentDialog({ open, onClose, plot, onPaymentAdded }) {
               InputLabelProps={{ shrink: true }}
             />
             <TextField
-              label="Note"
+              label="Payment Mode"
+              select
               fullWidth
-              value={form.note}
-              onChange={e => setForm({ ...form, note: e.target.value })}
+              value={form.paymentMode}
+              onChange={e => setForm({ ...form, paymentMode: e.target.value })}
+            >
+              {PAYMENT_MODES.map(m => <MenuItem key={m.value} value={m.value}>{m.label}</MenuItem>)}
+            </TextField>
+          </Stack>
+
+          <Stack direction="row" spacing={2}>
+            <TextField
+              label="Final Plot Price"
+              type="number"
+              fullWidth
+              placeholder={plot?.price || 'Leave blank for default'}
+              value={form.finalPlotPrice}
+              onChange={e => setForm({ ...form, finalPlotPrice: e.target.value })}
+              InputProps={{ startAdornment: <InputAdornment position="start">₹</InputAdornment> }}
+            />
+            <TextField
+              label="Next Instalment Date"
+              type="date"
+              fullWidth
+              value={form.nextInstalmentDate}
+              onChange={e => setForm({ ...form, nextInstalmentDate: e.target.value })}
+              InputLabelProps={{ shrink: true }}
             />
           </Stack>
+
+          <TextField
+            label="Note"
+            fullWidth
+            multiline
+            rows={2}
+            value={form.note}
+            onChange={e => setForm({ ...form, note: e.target.value })}
+          />
 
           <Button
             variant="contained"
@@ -153,15 +220,15 @@ export default function PaymentDialog({ open, onClose, plot, onPaymentAdded }) {
             <Stack spacing={1}>
               {payments.map(p => (
                 <Box key={p._id} sx={{ bgcolor: '#f5f7fa', p: 1.5, borderRadius: 2 }}>
-                  <Stack direction="row" justifyContent="space-between" alignItems="center">
+                  <Stack direction="row" justifyContent="space-between" alignItems="flex-start" mb={1}>
                     <Box>
                       <Typography variant="body2" fontWeight={700} color="#1a3c5e">
                         ₹{Number(p.amount).toLocaleString('en-IN')}
                       </Typography>
                       <Typography variant="caption" color="#666">
                         {new Date(p.paymentDate).toLocaleDateString('en-IN')}
-                        {p.note ? ` — ${p.note}` : ''}
-                        {p.recordedBy ? ` · ${p.recordedBy.name}` : ''}
+                        {p.paymentMode && ` • ${p.paymentMode}`}
+                        {p.recordedBy ? ` • ${p.recordedBy.name}` : ''}
                       </Typography>
                     </Box>
                     <Chip
@@ -170,6 +237,23 @@ export default function PaymentDialog({ open, onClose, plot, onPaymentAdded }) {
                       sx={{ bgcolor: '#1a3c5e', color: 'white', fontWeight: 600, fontSize: '0.7rem' }}
                     />
                   </Stack>
+                  {p.note && (
+                    <Typography variant="caption" color="#666" display="block" mb={0.5}>
+                      📝 {p.note}
+                    </Typography>
+                  )}
+                  {p.finalPlotPrice && (
+                    <Typography variant="caption" color="#1a3c5e" display="block" fontWeight={600} mb={0.5}>
+                      Final Price: ₹{Number(p.finalPlotPrice).toLocaleString('en-IN')}
+                    </Typography>
+                  )}
+                  {p.nextInstalmentDate && (
+                    <Box sx={{ bgcolor: '#fff9c4', px: 1, py: 0.5, borderRadius: 1, mt: 0.5 }}>
+                      <Typography variant="caption" color="#e65100" fontWeight={600}>
+                        📅 Next Payment: {new Date(p.nextInstalmentDate).toLocaleDateString('en-IN')}
+                      </Typography>
+                    </Box>
+                  )}
                 </Box>
               ))}
             </Stack>

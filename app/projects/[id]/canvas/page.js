@@ -46,6 +46,7 @@ export default function CanvasPage() {
       flexDirection: 'column',
       bgcolor: '#f9f9f6',
       zIndex: 1200,
+      overflow: 'hidden',
     }}>
       {/* Top bar */}
       <Box sx={{

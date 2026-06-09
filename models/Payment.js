@@ -12,6 +12,10 @@ const PaymentSchema = new mongoose.Schema(
     },
     paymentDate: { type: Date, default: Date.now },
     note: { type: String, trim: true },
+    paymentMode: { type: String, enum: ['cash', 'cheque', 'upi', 'bank_transfer', 'other'], default: 'cash' },
+    finalPlotPrice: { type: Number },
+    nextInstalmentDate: { type: Date },
+    agentCommission: { type: Number },
     recordedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
   },
   { timestamps: true }

@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState, useCallback } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, useCallback } from 'react';
 import { Box, Typography, CircularProgress, Button, Chip } from '@mui/material';
 import axios from 'axios';
 import { useSnackbar } from 'notistack';
@@ -76,21 +76,80 @@ export default function ProjectCanvas({ projectId, readOnly = false }) {
   const copiedPlot = useRef(null);
   const [hasCopied, setHasCopied] = useState(false);
 
+  // Canvas settings
+  const [settings, setSettings] = useState({
+    snapToGrid: true,
+    showGrid: true,
+    showDots: false,
+    bgColor: '#f9f9f6',
+  });
+
+  /* ── Synchronous layout effect to capture dimensions early ── */
+  useLayoutEffect(() => {
+    const captureSize = () => {
+      if (containerRef.current) {
+        const rect = containerRef.current.getBoundingClientRect();
+        if (rect.width > 0 && rect.height > 0) {
+          setDimensions({ width: rect.width, height: rect.height });
+        }
+      }
+    };
+    captureSize();
+  }, []);
+
   /* ── Size observer ── */
   useEffect(() => {
     const update = () => {
       if (containerRef.current) {
-        setDimensions({
-          width: containerRef.current.offsetWidth,
-          height: containerRef.current.offsetHeight,
-        });
+        const rect = containerRef.current.getBoundingClientRect();
+        const width = rect.width;
+        const height = rect.height;
+        if (width > 0 && height > 0) {
+          setDimensions({ width, height });
+        }
       }
     };
+    
+    // Multiple updates to ensure we get correct dimensions after layout settles
     update();
+    
+    const timeouts = [
+      setTimeout(update, 0),
+      setTimeout(update, 16),
+      setTimeout(update, 100),
+      setTimeout(update, 500),
+    ];
+    
     const ro = new ResizeObserver(update);
     if (containerRef.current) ro.observe(containerRef.current);
-    return () => ro.disconnect();
+    
+    // Also listen to window resize as fallback
+    window.addEventListener('resize', update);
+    
+    // Force update on visibility change
+    document.addEventListener('visibilitychange', update);
+    
+    return () => {
+      timeouts.forEach(id => clearTimeout(id));
+      ro.disconnect();
+      window.removeEventListener('resize', update);
+      document.removeEventListener('visibilitychange', update);
+    };
   }, []);
+
+  /* ── Recalculate dimensions when loading completes ── */
+  useEffect(() => {
+    if (!loading && containerRef.current) {
+      const recalc = () => {
+        const rect = containerRef.current.getBoundingClientRect();
+        if (rect.width > 0 && rect.height > 0) {
+          setDimensions({ width: rect.width, height: rect.height });
+        }
+      };
+      // Small delay to allow DOM to settle after data loads
+      setTimeout(recalc, 50);
+    }
+  }, [loading]);
 
   /* ── Data fetch ── */
   useEffect(() => { fetchData(); }, [projectId]);
@@ -159,7 +218,8 @@ export default function ProjectCanvas({ projectId, readOnly = false }) {
   const onDown = (clientX, clientY) => {
     const stage = stageRef.current;
 
-    // SELECT or PAN — both pan with drag
+    // SELECT or PAN — pan with drag on empty canvas only
+    // (plot drag is handled by Konva Group draggable, not here)
     if (activeTool === CANVAS_TOOL_TYPES.SELECT || activeTool === CANVAS_TOOL_TYPES.PAN) {
       isPanning.current = true;
       panStart.current = { x: clientX - stage.x(), y: clientY - stage.y() };
@@ -381,7 +441,54 @@ export default function ProjectCanvas({ projectId, readOnly = false }) {
     }
   };
 
-  /* ── Plot save ── */
+  /* ── Plot drag save ── */
+  const handlePlotDragEnd = async (plot, e) => {
+    const node = e.target;
+    const newX = node.x();
+    const newY = node.y();
+
+    const dx = newX - (plot.canvasX ?? plot.coordinates[0]?.x ?? 0);
+    const dy = newY - (plot.canvasY ?? plot.coordinates[0]?.y ?? 0);
+    const newCoords = plot.coordinates.map(p => ({ x: p.x + dx, y: p.y + dy }));
+
+    const updated = { canvasX: newX, canvasY: newY, coordinates: newCoords };
+    setPlots(prev => prev.map(p => p._id === plot._id ? { ...p, ...updated } : p));
+    // Reset Group position so shapes stay at absolute coords
+    node.position({ x: 0, y: 0 });
+
+    try {
+      await axios.put(`/api/plots/${plot._id}`, updated);
+    } catch {
+      enqueueSnackbar('Failed to save plot position', { variant: 'error' });
+      setPlots(prev => prev.map(p => p._id === plot._id ? plot : p));
+    }
+  };
+
+  // Snap position to grid
+  const snapPos = (x, y) => {
+    if (!settings.snapToGrid) return { x, y };
+    return {
+      x: Math.round(x / GRID_SIZE) * GRID_SIZE,
+      y: Math.round(y / GRID_SIZE) * GRID_SIZE,
+    };
+  };
+
+  // dragBoundFunc for a plot — receives absolute stage position, returns snapped position
+  const makeDragBound = (plot) => (pos) => {
+    const stage = stageRef.current;
+    const scale = stage.scaleX();
+    const stageX = stage.x();
+    const stageY = stage.y();
+    // Convert screen pos → canvas pos
+    const cx = (pos.x - stageX) / scale;
+    const cy = (pos.y - stageY) / scale;
+    const snapped = snapPos(cx, cy);
+    // Convert back to screen pos
+    return {
+      x: snapped.x * scale + stageX,
+      y: snapped.y * scale + stageY,
+    };
+  };
   const handlePlotSave = async (formData) => {
     try {
       let coords = [], canvasX = 0, canvasY = 0, canvasW = 100, canvasH = 80;
@@ -447,30 +554,36 @@ export default function ProjectCanvas({ projectId, readOnly = false }) {
   const roadPreview = roadPoints.length ? [...roadPoints.flatMap(p => [p.x, p.y]), mousePos.x, mousePos.y] : [];
 
   return (
-    <Box sx={{ display: 'flex', flexDirection: 'column', width: '100%', height: '100%', overflow: 'hidden' }}>
-      <CanvasToolbar
-        activeTool={activeTool}
-        onToolChange={(tool) => {
-          // Switching away from road tool while drawing — cancel
-          if (activeTool === CANVAS_TOOL_TYPES.ROAD && roadPoints.length > 0 && tool !== CANVAS_TOOL_TYPES.ROAD) {
-            setRoadPoints([]);
-          }
-          setActiveTool(tool);
-        }}
-        onSave={saveCanvas}
-        onUndo={handleUndo}
-        saving={saving}
-        readOnly={readOnly}
-        roadPointCount={roadPoints.length}
-        onFinishRoad={handleFinishRoad}
-        onCancelRoad={handleCancelRoad}
-      />
+    <Box sx={{ display: 'flex', flexDirection: 'column', width: '100%', height: '100%', overflow: 'hidden', minHeight: 0 }}>
+      <Box sx={{ flexShrink: 0 }}>
+        <CanvasToolbar
+          activeTool={activeTool}
+          onToolChange={(tool) => {
+            if (activeTool === CANVAS_TOOL_TYPES.ROAD && roadPoints.length > 0 && tool !== CANVAS_TOOL_TYPES.ROAD) {
+              setRoadPoints([]);
+            }
+            setActiveTool(tool);
+          }}
+          onSave={saveCanvas}
+          onUndo={handleUndo}
+          saving={saving}
+          readOnly={readOnly}
+          roadPointCount={roadPoints.length}
+          onFinishRoad={handleFinishRoad}
+          onCancelRoad={handleCancelRoad}
+          settings={settings}
+          onSettingsChange={setSettings}
+        />
+      </Box>
 
       {/* Canvas container — must fill remaining height exactly */}
       <Box
         ref={containerRef}
         sx={{
           flex: 1,
+          minHeight: 0,
+          width: '100%',
+          height: '100%',
           overflow: 'hidden',
           position: 'relative',
           cursor: getCursor(),
@@ -554,6 +667,16 @@ export default function ProjectCanvas({ projectId, readOnly = false }) {
           </Box>
         )}
 
+        {activeTool === CANVAS_TOOL_TYPES.SELECT && !drawerOpen && (
+          <Box sx={{
+            position: 'absolute', bottom: 16, left: '50%', transform: 'translateX(-50%)', zIndex: 10,
+            bgcolor: 'rgba(26,60,94,0.75)', color: 'white', px: 2, py: 0.6, borderRadius: 2,
+            fontSize: '0.72rem', fontWeight: 600, whiteSpace: 'nowrap', pointerEvents: 'none',
+          }}>
+            Tap plot to view · Drag to move
+          </Box>
+        )}
+
         {/* Mobile paste floating button */}
         {hasCopied && (
           <Box sx={{
@@ -614,13 +737,25 @@ export default function ProjectCanvas({ projectId, readOnly = false }) {
           onTouchStart={handleTouchStart}
           onTouchMove={handleTouchMove}
           onTouchEnd={handleTouchEnd}
-          style={{ display: 'block', background: CANVAS_BG }}
+          style={{ display: 'block', background: settings.bgColor, position: 'absolute', top: 0, left: 0 }}
         >
           <Layer>
-            {/* Grid — static, no state, drawn once */}
-            {GRID_LINES.map(l => (
-              <Line key={l.key} points={l.points} stroke="#e8e8e8" strokeWidth={0.5} listening={false} />
+            {/* Grid lines */}
+            {settings.showGrid && GRID_LINES.map(l => (
+              <Line key={l.key} points={l.points} stroke={settings.bgColor === '#1e1e2e' ? '#2a2a3e' : '#e8e8e8'} strokeWidth={0.5} listening={false} />
             ))}
+
+            {/* Grid dots */}
+            {settings.showDots && !settings.showGrid && (() => {
+              const dots = [];
+              for (let x = 0; x <= CANVAS_SIZE; x += GRID_SIZE) {
+                for (let y = 0; y <= CANVAS_SIZE; y += GRID_SIZE) {
+                  dots.push(<Circle key={`d${x}_${y}`} x={x} y={y} radius={1.5}
+                    fill={settings.bgColor === '#1e1e2e' ? '#444466' : '#cccccc'} listening={false} />);
+                }
+              }
+              return dots;
+            })()}
 
             {/* Roads */}
             {roads.map(road => (
@@ -665,16 +800,26 @@ export default function ProjectCanvas({ projectId, readOnly = false }) {
                 const y = plot.canvasY ?? coords[0].y;
                 const w = plot.canvasWidth ?? (coords[1].x - coords[0].x);
                 const h = plot.canvasHeight ?? (coords[3].y - coords[0].y);
+                const draggable = !readOnly && activeTool === CANVAS_TOOL_TYPES.SELECT;
                 return (
-                  <Group key={plot._id}>
+                  <Group key={plot._id}
+                    draggable={draggable}
+                    x={0} y={0}
+                    dragBoundFunc={draggable ? makeDragBound(plot) : undefined}
+                    onDragStart={(e) => { e.cancelBubble = true; pushHistory(); }}
+                    onDragEnd={(e) => { e.cancelBubble = true; handlePlotDragEnd(plot, e); }}
+                    onMouseEnter={e => {
+                      const c = e.target.getStage().container();
+                      c.style.cursor = draggable ? 'move' : 'pointer';
+                    }}
+                    onMouseLeave={e => { e.target.getStage().container().style.cursor = getCursor(); }}
+                  >
                     <Rect x={x} y={y} width={w} height={h}
                       fill={color + 'CC'} stroke={isSelected ? '#fff' : color}
                       strokeWidth={isSelected ? 3 : 2} cornerRadius={3}
                       shadowEnabled={isSelected} shadowColor="rgba(0,0,0,0.3)" shadowBlur={8}
                       onClick={(e) => handlePlotClick(plot, e)}
                       onTap={(e) => handlePlotClick(plot, e)}
-                      onMouseEnter={e => { e.target.getStage().container().style.cursor = 'pointer'; }}
-                      onMouseLeave={e => { e.target.getStage().container().style.cursor = getCursor(); }}
                     />
                     <Text x={x + 4} y={y + (h / 2) - 8} width={w - 8}
                       text={plot.plotNumber} fontSize={Math.max(9, Math.min(13, w / 5))}
@@ -683,9 +828,20 @@ export default function ProjectCanvas({ projectId, readOnly = false }) {
                       onTap={(e) => handlePlotClick(plot, e)}
                       listening={false}
                     />
-                    {h > 36 && plot.area && (
-                      <Text x={x + 2} y={y + h - 14} width={w - 4}
-                        text={plot.area} fontSize={8} fill="rgba(255,255,255,0.75)" align="center" listening={false} />
+                    {h > 48 && plot.area && (
+                      <Text x={x + 2} y={y + h - (plot.price ? 32 : 22)} width={w - 4}
+                        text={plot.area}
+                        fontSize={8} fill="rgba(255,255,255,0.7)" align="center" listening={false} />
+                    )}
+                    {h > 36 && (plot.length || plot.width) && (
+                      <Text x={x + 2} y={y + h - (plot.price ? 22 : 14)} width={w - 4}
+                        text={`${plot.length || '-'} × ${plot.width || '-'}`}
+                        fontSize={8} fill="rgba(255,255,255,0.75)" align="center" listening={false} />
+                    )}
+                    {h > 36 && plot.price > 0 && (
+                      <Text x={x + 2} y={y + h - 12} width={w - 4}
+                        text={`₹${Number(plot.price).toLocaleString('en-IN')}`}
+                        fontSize={8} fill="rgba(255,255,255,0.9)" fontStyle="bold" align="center" listening={false} />
                     )}
                   </Group>
                 );
@@ -695,14 +851,24 @@ export default function ProjectCanvas({ projectId, readOnly = false }) {
                 const flatPts = coords.flatMap(p => [p.x, p.y]);
                 const cx = coords.reduce((s, p) => s + p.x, 0) / coords.length;
                 const cy = coords.reduce((s, p) => s + p.y, 0) / coords.length;
+                const draggable = !readOnly && activeTool === CANVAS_TOOL_TYPES.SELECT;
                 return (
-                  <Group key={plot._id}>
+                  <Group key={plot._id}
+                    draggable={draggable}
+                    x={0} y={0}
+                    dragBoundFunc={draggable ? makeDragBound(plot) : undefined}
+                    onDragStart={(e) => { e.cancelBubble = true; pushHistory(); }}
+                    onDragEnd={(e) => { e.cancelBubble = true; handlePlotDragEnd(plot, e); }}
+                    onMouseEnter={e => {
+                      const c = e.target.getStage().container();
+                      c.style.cursor = draggable ? 'move' : 'pointer';
+                    }}
+                    onMouseLeave={e => { e.target.getStage().container().style.cursor = getCursor(); }}
+                  >
                     <Line points={flatPts} closed fill={color + 'CC'}
                       stroke={isSelected ? '#fff' : color} strokeWidth={isSelected ? 3 : 2}
                       onClick={(e) => handlePlotClick(plot, e)}
                       onTap={(e) => handlePlotClick(plot, e)}
-                      onMouseEnter={e => { e.target.getStage().container().style.cursor = 'pointer'; }}
-                      onMouseLeave={e => { e.target.getStage().container().style.cursor = getCursor(); }}
                     />
                     <Text x={cx - 24} y={cy - 7} width={48}
                       text={plot.plotNumber} fontSize={11} fill="white" fontStyle="bold" align="center"
@@ -746,10 +912,33 @@ export default function ProjectCanvas({ projectId, readOnly = false }) {
 
             {/* Text labels */}
             {textLabels.map(t => (
-              <Text key={t.id} x={t.x} y={t.y} text={t.text} fontSize={14}
-                fill="#1a3c5e" fontStyle="bold" draggable={!readOnly}
-                onDragEnd={e => setTextLabels(prev => prev.map(tl => tl.id === t.id ? { ...tl, x: e.target.x(), y: e.target.y() } : tl))}
-              />
+              <Group key={t.id} x={0} y={0}>
+                <Text 
+                  x={t.x} 
+                  y={t.y} 
+                  text={t.text} 
+                  fontSize={14}
+                  fill="#1a3c5e" 
+                  fontStyle="bold" 
+                  draggable={!readOnly && activeTool !== CANVAS_TOOL_TYPES.DELETE}
+                  listening={!readOnly}
+                  onDragEnd={e => setTextLabels(prev => prev.map(tl => tl.id === t.id ? { ...tl, x: e.target.x(), y: e.target.y() } : tl))}
+                  onClick={() => {
+                    if (activeTool === CANVAS_TOOL_TYPES.DELETE) {
+                      pushHistory();
+                      setTextLabels(prev => prev.filter(tl => tl.id !== t.id));
+                    }
+                  }}
+                  onMouseEnter={e => { 
+                    if (activeTool === CANVAS_TOOL_TYPES.DELETE) {
+                      e.target.getStage().container().style.cursor = 'not-allowed'; 
+                    }
+                  }}
+                  onMouseLeave={e => { 
+                    e.target.getStage().container().style.cursor = getCursor(); 
+                  }}
+                />
+              </Group>
             ))}
 
             {/* Drawing preview */}
@@ -782,6 +971,7 @@ export default function ProjectCanvas({ projectId, readOnly = false }) {
         projectId={projectId}
         initialData={pasteData || editPlot}
         editMode={!!editPlot}
+        plots={plots}
       />
       <PlotDetailDrawer
         plot={selectedPlot}
