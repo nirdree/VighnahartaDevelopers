@@ -1,5 +1,6 @@
 'use client';
 
+import { useState } from 'react';
 import {
   Drawer, Box, Typography, Stack, Chip, Button, Divider,
   IconButton, Avatar,
@@ -7,11 +8,13 @@ import {
 import CloseIcon from '@mui/icons-material/Close';
 import EditIcon from '@mui/icons-material/Edit';
 import DeleteIcon from '@mui/icons-material/Delete';
-import PersonIcon from '@mui/icons-material/Person';
+import PaymentsIcon from '@mui/icons-material/Payments';
+import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import PhoneIcon from '@mui/icons-material/Phone';
 import GridOnIcon from '@mui/icons-material/GridOn';
 import { PLOT_STATUS_COLORS, PLOT_STATUS_LABELS } from '@/lib/constants';
 import { useAuth } from '@/hooks/useAuth';
+import PaymentDialog from './PaymentDialog';
 
 function InfoRow({ label, value }) {
   if (!value) return null;
@@ -25,8 +28,9 @@ function InfoRow({ label, value }) {
   );
 }
 
-export default function PlotDetailDrawer({ plot, open, onClose, onEdit, onDelete }) {
+export default function PlotDetailDrawer({ plot, open, onClose, onEdit, onDelete, onCopy, onPlotUpdated }) {
   const { user } = useAuth();
+  const [paymentOpen, setPaymentOpen] = useState(false);
   if (!plot) return null;
 
   const statusColor = PLOT_STATUS_COLORS[plot.status] || '#999';
@@ -131,6 +135,24 @@ export default function PlotDetailDrawer({ plot, open, onClose, onEdit, onDelete
           <Box sx={{ p: 2.5 }}>
             <Stack spacing={1.5}>
               <Button
+                variant="outlined"
+                fullWidth
+                startIcon={<ContentCopyIcon />}
+                onClick={() => { onCopy?.(plot); onClose(); }}
+                sx={{ borderColor: '#c8922a', color: '#c8922a', '&:hover': { bgcolor: '#fff3e0' } }}
+              >
+                Copy Plot
+              </Button>
+              <Button
+                variant="contained"
+                fullWidth
+                startIcon={<PaymentsIcon />}
+                onClick={() => setPaymentOpen(true)}
+                sx={{ bgcolor: '#c8922a', '&:hover': { bgcolor: '#a57420' } }}
+              >
+                Manage Payments
+              </Button>
+              <Button
                 variant="contained"
                 fullWidth
                 startIcon={<EditIcon />}
@@ -152,6 +174,13 @@ export default function PlotDetailDrawer({ plot, open, onClose, onEdit, onDelete
           </Box>
         </>
       )}
+
+      <PaymentDialog
+        open={paymentOpen}
+        onClose={() => setPaymentOpen(false)}
+        plot={plot}
+        onPaymentAdded={(updatedPlot) => { onPlotUpdated?.(updatedPlot); setPaymentOpen(false); }}
+      />
     </Drawer>
   );
 }
