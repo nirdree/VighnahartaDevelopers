@@ -15,6 +15,7 @@ export async function GET(request, { params }) {
 
     return NextResponse.json({ success: true, data: project });
   } catch (error) {
+    console.error('Get project error:', { projectId: params?.id, error });
     return NextResponse.json({ success: false, error: 'Internal server error' }, { status: 500 });
   }
 }

@@ -11,9 +11,25 @@ export function AuthProvider({ children }) {
   const [loading, setLoading] = useState(true);
   const router = useRouter();
 
+  useEffect(() => {
+    const interceptorId = axios.interceptors.response.use(
+      (response) => response,
+      (error) => {
+        const status = error?.response?.status;
+        // If cookie is missing/expired (common on mobile refresh), send user to login.
+        if (status === 401) {
+          setUser(null);
+          router.push('/login');
+        }
+        return Promise.reject(error);
+      }
+    );
+    return () => axios.interceptors.response.eject(interceptorId);
+  }, [router]);
+
   const fetchMe = useCallback(async () => {
     try {
-      const { data } = await axios.get('/api/auth/me');
+      const { data } = await axios.get('/api/auth/me', { timeout: 15000 });
       if (data.success) setUser(data.data);
       else setUser(null);
     } catch {

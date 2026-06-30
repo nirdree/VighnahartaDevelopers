@@ -9,6 +9,7 @@ import LogoutIcon from '@mui/icons-material/Logout';
 import axios from 'axios';
 import dynamic from 'next/dynamic';
 import { useAuth } from '@/hooks/useAuth';
+import { useSnackbar } from 'notistack';
 
 const ProjectCanvas = dynamic(() => import('@/components/canvas/ProjectCanvas'), {
   ssr: false,
@@ -23,13 +24,20 @@ export default function CanvasPage() {
   const { id } = useParams();
   const router = useRouter();
   const { user, logout } = useAuth();
+  const { enqueueSnackbar } = useSnackbar();
   const [project, setProject] = useState(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     if (id) {
-      axios.get(`/api/projects/${id}`)
+      axios.get(`/api/projects/${id}`, { timeout: 15000 })
         .then(res => { if (res.data.success) setProject(res.data.data); })
+        .catch((error) => {
+          const status = error?.response?.status;
+          if (status === 401) enqueueSnackbar('Session expired. Please login again.', { variant: 'error' });
+          else if (status === 404) enqueueSnackbar('Project not found.', { variant: 'error' });
+          else enqueueSnackbar('Failed to load project details', { variant: 'error' });
+        })
         .finally(() => setLoading(false));
     }
   }, [id]);

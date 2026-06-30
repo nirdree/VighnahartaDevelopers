@@ -115,9 +115,14 @@ export default function ProjectsPage() {
   const fetchProjects = async () => {
     setLoading(true);
     try {
-      const { data } = await axios.get('/api/projects');
+      const { data } = await axios.get('/api/projects', { timeout: 15000 });
       if (data.success) setProjects(data.data);
-    } catch { enqueueSnackbar('Failed to load projects', { variant: 'error' }); }
+    } catch (error) {
+      const status = error?.response?.status;
+      if (status === 401) enqueueSnackbar('Session expired. Please login again.', { variant: 'error' });
+      else if (status === 403) enqueueSnackbar('You do not have access to view projects.', { variant: 'error' });
+      else enqueueSnackbar('Failed to load projects', { variant: 'error' });
+    }
     finally { setLoading(false); }
   };
 
